@@ -342,7 +342,14 @@ footer{text-align:center;padding:18px 16px 28px;font-size:11px;color:#90A4AE;bor
         </div>
       </div>
     </div>
-    <div style="font-size:10px;color:#2E7D32;text-align:center;margin-top:7px;">Conexão com a planilha configurada automaticamente.</div>
+    <div style="margin-top:12px;padding:12px;background:#F1F8E9;border:1px solid #C8E6C9;border-radius:10px;">
+      <div style="font-size:11px;font-weight:700;color:#2E7D32;margin-bottom:5px;">Conexão da alcateia</div>
+      <div style="font-size:10px;color:#4E6E5A;margin-bottom:7px;">Informe a URL do Google Apps Script da planilha desta alcateia. Ela fica salva somente neste navegador.</div>
+      <input id="sheetsUrlInput" type="password" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off"
+        style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #A5C9A8;border-radius:8px;background:#fff;">
+      <div id="sheetsConfigStatus" style="font-size:10px;color:#2E7D32;margin-top:6px;"></div>
+      <button type="button" class="btn-sm btn-cinza" onclick="saveSheetsConfig()" style="margin-top:7px;">Salvar conexão</button>
+    </div>
 <button class="btn-wolf" onclick="doLogin()">Entrar na Alcateia →</button>
   </div>
 
@@ -755,12 +762,12 @@ const MOD_COLORS = {
 // STATE
 // ════════════════════════════════════════════════════════════════════
 let scouts=[], currentId=null, currentEixo=EIXOS_LIST[0].key, escolhaCtx={blocoId:null};
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycby6gKvRFWDmybOXiMMCAX18vvLHFiIMHHPmUG5mf-rALh4Ru1bs1bS6xnnlkujIE87m/exec';
-let setupMod=null, setupStep=1, allLobinhos=[], sheetsUrl=SHEETS_URL, lastSync=null;
+const SHEETS_STORAGE_KEY = 'alcateia_baleia_sheets_url_v1';
+let setupMod=null, setupStep=1, allLobinhos=[], sheetsUrl='', lastSync=null;
 
 function load(){
   try{const d=localStorage.getItem('alcateia_baleia_v2');if(d)scouts=JSON.parse(d);}catch(e){scouts=[];}
-  sheetsUrl=SHEETS_URL;
+  try{sheetsUrl=localStorage.getItem(SHEETS_STORAGE_KEY)||'';}catch(e){sheetsUrl='';}
 }
 function save(){localStorage.setItem('alcateia_baleia_v2',JSON.stringify(scouts));}
 function ensure(s){if(!s.completed)s.completed={};if(!s.pending)s.pending={};if(!s.especialidades)s.especialidades={};if(!s.escolhas)s.escolhas={};return s;}
@@ -787,7 +794,52 @@ function selectMod(mod){
 }
 
 
+function saveSheetsConfig(){
+  const input=document.getElementById('sheetsUrlInput');
+  if(!input)return;
+  const value=input.value.trim();
+  if(!value){showToast('Informe a URL do Google Apps Script.','error');return;}
+  let u;
+  try{u=new URL(value);}catch(e){showToast('URL inválida. Cole a URL /exec do Google Apps Script.','error');return;}
+  if(u.protocol!=='https:' || u.hostname!=='script.google.com' || !u.pathname.startsWith('/macros/s/')){
+    showToast('Use a URL de implantação do Google Apps Script terminada em /exec.','error');return;
+  }
+  sheetsUrl=value;
+  try{localStorage.setItem(SHEETS_STORAGE_KEY,sheetsUrl);}catch(e){}
+  input.value='';
+  input.placeholder='Conexão salva neste navegador';
+  const status=document.getElementById('sheetsConfigStatus');
+  if(status)status.textContent='Conexão configurada neste navegador.';
+  showToast('Conexão da alcateia salva!','success');
+}
+
+function loadSheetsConfigUI(){
+  const input=document.getElementById('sheetsUrlInput');
+  const status=document.getElementById('sheetsConfigStatus');
+  if(!input)return;
+  if(sheetsUrl){
+    input.placeholder='Conexão já configurada neste navegador';
+    if(status)status.textContent='Conexão configurada neste navegador.';
+  }else{
+    input.placeholder='https://script.google.com/macros/s/.../exec';
+    if(status)status.textContent='Ainda não configurada.';
+  }
+}
+
 async function doLogin(){
+  const configInput=document.getElementById('sheetsUrlInput');
+  if(configInput && configInput.value.trim()){
+    const value=configInput.value.trim();
+    let u;
+    try{u=new URL(value);}catch(e){showToast('URL inválida. Cole a URL /exec do Google Apps Script.','error');return;}
+    if(u.protocol!=='https:' || u.hostname!=='script.google.com' || !u.pathname.startsWith('/macros/s/')){
+      showToast('Use a URL de implantação do Google Apps Script terminada em /exec.','error');return;
+    }
+    sheetsUrl=value;
+    try{localStorage.setItem(SHEETS_STORAGE_KEY,sheetsUrl);}catch(e){}
+    configInput.value='';
+  }
+  if(!sheetsUrl){showToast('Configure primeiro a conexão da planilha desta alcateia.','error');return;}
   const reg=document.getElementById('inputReg').value.trim();
   const name=document.getElementById('inputName').value.trim();
   const matilha=document.getElementById('inputMatilha').value.trim();
@@ -1531,6 +1583,7 @@ function hideLoading(){document.getElementById('loadingOverlay').style.display='
 // INIT
 load();
 window.addEventListener('DOMContentLoaded',()=>{
+  loadSheetsConfigUI();
   const last=localStorage.getItem('alcateia_last');
   if(last){
     try{
