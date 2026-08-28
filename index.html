@@ -904,14 +904,19 @@ function showChangeUser(){
 // ════════════════════════════════════════════════════════════════════
 async function fetchFromSheets(reg){
   if(!sheetsUrl)return null;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),10000);
   try{
-    const r=await fetch(sheetsUrl+'?action=buscar&registro='+encodeURIComponent(reg),{cache:'no-store'});
+    const r=await fetch(sheetsUrl+'?action=buscar&registro='+encodeURIComponent(reg)+'&_t='+Date.now(),{
+      cache:'no-store', signal:controller.signal
+    });
     if(!r.ok) return {ok:false,erro:'HTTP '+r.status};
-    const data=await r.json();
-    return data;
-  }catch(e){return {ok:false,erro:'Não foi possível acessar a planilha.'};}
+    return await r.json();
+  }catch(e){
+    if(e&&e.name==='AbortError') return {ok:false,erro:'Tempo limite da conexão com a planilha.'};
+    return {ok:false,erro:'Não foi possível acessar a planilha.'};
+  }finally{clearTimeout(timer);}
 }
-
 async function syncFromSheets(s){
   if(!sheetsUrl)return 'skipped';
 
@@ -981,51 +986,55 @@ async function pushToSheets(s){
           etapa:ETAPAS_DEF[etapa].label,blocos_concluidos:t,atualizacao:new Date().toLocaleString('pt-BR')},
     eixos
   };
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),12000);
   try{
-    const r=await fetch(sheetsUrl,{method:'POST',body:JSON.stringify(payload),cache:'no-store'});
+    const r=await fetch(sheetsUrl,{method:'POST',body:JSON.stringify(payload),cache:'no-store',signal:controller.signal});
     if(!r.ok)return false;
     const d=await r.json();
     return d.ok===true;
   }catch(e){return false;}
+  finally{clearTimeout(timer);}
 }
 
 async function syncNow(){
   const s=getS();if(!s)return;
-  if(!sheetsUrl){showToast('Configure a URL do Google Apps Script primeiro.','error');return;}
+  if(!sheetsUrl){showToast('Conexão com a planilha não configurada.','error');return;}
   const btn=document.getElementById('syncBtn');
   btn.classList.add('syncing');
   document.getElementById('syncIcon').textContent='🔄';
   document.getElementById('syncLabel').textContent='Sincronizando...';
   setSyncStatus('ing','Lendo aprovações...');
 
-  // Primeiro puxa as decisões do chefe. Isso evita sobrescrever SIM com um estado local antigo.
-  const pullStatus=await syncFromSheets(s);
-  if(pullStatus==='error'){
+  try{
+    const pullStatus=await syncFromSheets(s);
+    if(pullStatus==='error'){
+      setSyncStatus('err','Não foi possível acessar a planilha');
+      showToast('Não foi possível acessar a planilha.','error');
+      return;
+    }
+
+    setSyncStatus('ing','Salvando solicitações...');
+    const ok=await pushToSheets(s);
+
+    if(ok){
+      lastSync=new Date();
+      setSyncStatus('ok','Sincronizado '+lastSync.toLocaleTimeString('pt-BR'));
+      renderScoutBar();buildEixoTabs();renderBlocos();
+      showToast('Dados sincronizados com a planilha!','success');
+    }else{
+      setSyncStatus('err','Tempo limite ou erro ao salvar');
+      showToast('A sincronização demorou demais. Tente novamente.','error');
+    }
+  }catch(e){
+    setSyncStatus('err','Erro na sincronização');
+    showToast('Erro na sincronização.','error');
+  }finally{
     btn.classList.remove('syncing');
     document.getElementById('syncIcon').textContent='☁️';
     document.getElementById('syncLabel').textContent='Sincronizar';
-    setSyncStatus('err','Não foi possível acessar a planilha');
-    showToast('Não foi possível acessar a planilha.','error');
-    return;
-  }
-
-  setSyncStatus('ing','Salvando solicitações...');
-  const ok=await pushToSheets(s);
-  btn.classList.remove('syncing');
-  document.getElementById('syncIcon').textContent='☁️';
-  document.getElementById('syncLabel').textContent='Sincronizar';
-
-  if(ok){
-    lastSync=new Date();
-    setSyncStatus('ok','Sincronizado '+lastSync.toLocaleTimeString('pt-BR'));
-    renderScoutBar();buildEixoTabs();renderBlocos();
-    showToast('Dados sincronizados com a planilha!','success');
-  }else{
-    setSyncStatus('err','Erro ao salvar na planilha');
-    showToast('Não foi possível salvar as solicitações.','error');
   }
 }
-
 function setSyncStatus(state,text){
   const dot=document.getElementById('syncDot');
   dot.className='sync-dot '+state;
