@@ -934,7 +934,24 @@ async function syncFromSheets(s){
   const remote=await fetchFromSheets(s.registro);
   if(remote&&remote.ok&&remote.encontrado){
     ensure(s);
-    Object.assign(s.completed,remote.checked||{});
+
+    const checked=remote.checked||{};
+    const pending=remote.pending||{};
+
+    // A planilha é a autoridade para o resultado da aprovação.
+    Object.keys(checked).forEach(id=>{
+      s.completed[id]=true;
+      delete s.pending[id];
+    });
+    Object.keys(pending).forEach(id=>{
+      if(!s.completed[id])s.pending[id]=true;
+    });
+
+    // Remover pendências que o chefe recusou (NAO).
+    Object.keys(s.pending).forEach(id=>{
+      if(!checked[id] && !pending[id]) delete s.pending[id];
+    });
+
     if(remote.especialidades)s.especialidades={...remote.especialidades};
     if(remote.escolhas)s.escolhas={...remote.escolhas};
     save();
@@ -972,7 +989,7 @@ async function pushToSheets(s){
     eixos
   };
   try{
-    const r=await fetch(sheetsUrl,{method:'POST',body:JSON.stringify(payload),headers:{'Content-Type':'application/json'}});
+    const r=await fetch(sheetsUrl,{method:'POST',body:JSON.stringify(payload),cache:'no-store'});
     const d=await r.json();
     return d.ok===true;
   }catch(e){return false;}
