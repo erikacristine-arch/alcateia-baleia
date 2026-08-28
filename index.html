@@ -881,22 +881,27 @@ async function fetchFromSheets(reg){
 }
 
 async function syncFromSheets(s){
-  if(!sheetsUrl||!s||!s.registro)return 'disabled';
-  const remote=await fetchFromSheets(s.registro);
-  if(remote&&!remote.ok)return 'error';
-  if(remote&&remote.encontrado){
+  if(!sheetsUrl)return 'skipped';
+  try{
+    const remote=await fetchFromSheets(s.registro);
+    if(!remote || remote.ok!==true)return 'error';
+    if(!remote.encontrado)return 'notfound';
     ensure(s);
-    s.name=remote.meta?.nome||s.name;
-    s.matilha=remote.meta?.matilha??s.matilha;
-    s.modalidade=remote.meta?.modalidade||s.modalidade||'basico';
+    if(remote.meta){
+      if(remote.meta.nome)s.name=remote.meta.nome;
+      if(remote.meta.matilha!=null)s.matilha=remote.meta.matilha;
+      if(remote.meta.modalidade)s.modalidade=normalizarModalidadeKey(remote.meta.modalidade);
+      if(remote.meta.etapa)s.entryEtapa=normalizarEtapaKey(remote.meta.etapa);
+    }
     s.completed={...(remote.checked||{})};
     s.pending={...(remote.pending||{})};
     s.especialidades={...(remote.especialidades||{})};
     s.escolhas={...(remote.escolhas||{})};
     save();
     return 'synced';
+  }catch(e){
+    return 'error';
   }
-  return 'notfound';
 }
 
 async function pushToSheets(s){
@@ -938,36 +943,38 @@ async function pushToSheets(s){
 
 async function syncNow(){
   const s=getS();if(!s)return;
-  if(!sheetsUrl){showToast('Configure a URL do Google Sheets primeiro.','error');return;}
+  if(!sheetsUrl){showToast('Configure a URL do Google Apps Script primeiro.','error');return;}
   const btn=document.getElementById('syncBtn');
   btn.classList.add('syncing');
   document.getElementById('syncIcon').textContent='🔄';
   document.getElementById('syncLabel').textContent='Sincronizando...';
-  setSyncStatus('ing','Sincronizando...');
+  setSyncStatus('ing','Lendo aprovações...');
 
+  // Primeiro puxa as decisões do chefe. Isso evita sobrescrever SIM com um estado local antigo.
   const pullStatus=await syncFromSheets(s);
   if(pullStatus==='error'){
     btn.classList.remove('syncing');
     document.getElementById('syncIcon').textContent='☁️';
     document.getElementById('syncLabel').textContent='Sincronizar';
     setSyncStatus('err','Não foi possível acessar a planilha');
-    showToast('Erro ao acessar a planilha. Nada foi sobrescrito.','error');
+    showToast('Não foi possível acessar a planilha.','error');
     return;
   }
 
-  // Depois de puxar as aprovações, grava o estado já atualizado.
+  setSyncStatus('ing','Salvando solicitações...');
   const ok=await pushToSheets(s);
   btn.classList.remove('syncing');
   document.getElementById('syncIcon').textContent='☁️';
   document.getElementById('syncLabel').textContent='Sincronizar';
+
   if(ok){
     lastSync=new Date();
     setSyncStatus('ok','Sincronizado '+lastSync.toLocaleTimeString('pt-BR'));
-    showToast('Dados sincronizados com a planilha!','success');
     renderScoutBar();buildEixoTabs();renderBlocos();
+    showToast('Dados sincronizados com a planilha!','success');
   }else{
-    setSyncStatus('err','Erro na sincronização');
-    showToast('Erro ao salvar na planilha.','error');
+    setSyncStatus('err','Erro ao salvar na planilha');
+    showToast('Não foi possível salvar as solicitações.','error');
   }
 }
 
@@ -1005,9 +1012,11 @@ function calcAge(b){if(!b)return'?';return Math.floor((Date.now()-new Date(b).ge
 function renderEtapaSteps(total,etapaAtual){
   const list=['patatenra','saltador','rastreador','cacador','cruzeiro'];
   const reqs={patatenra:0,saltador:4,rastreador:8,cacador:13,cruzeiro:18};
+  const atual=normalizarEtapaKey(etapaAtual);
   let html='';
   list.forEach((e,i)=>{
-    const done=total>=reqs[e];const cur=e===etapaAtual;
+    const done=total>=reqs[e];
+    const cur=e===atual;
     const cls=done?'done':(cur?'cur':'');
     const conn=i>0?`<div class="etapa-conn${total>=reqs[e]?' done':''}"></div>`:'';
     html+=`${conn}<div class="etapa-step ${cls}">
@@ -1036,10 +1045,25 @@ function isBlocoDone(s,bid){
   return(vd+cd)>=b.varQtd;
 }
 function countDone(s){return BLOCOS.filter(b=>isBlocoDone(s,b.id)).length;}
+function normalizarModalidadeKey(v){
+  const x=String(v||'').trim().toLowerCase();
+  if(x==='ar'||x.includes('lobinho do ar'))return 'ar';
+  if(x==='mar'||x.includes('lobinho do mar'))return 'mar';
+  return 'basico';
+}
+function normalizarEtapaKey(v){
+  const x=String(v||'').trim().toLowerCase();
+  const map={
+    'pata tenra':'patatenra','pata-tenra':'patatenra','patatenra':'patatenra',
+    'saltador':'saltador','rastreador':'rastreador','caçador':'cacador','cacador':'cacador',
+    'cruzeiro do sul':'cruzeiro','cruzeiro':'cruzeiro'
+  };
+  return map[x]||'patatenra';
+}
 function getEtapa(n,entry){
   if(n>=18)return'cruzeiro';if(n>=13)return'cacador';
   if(n>=8)return'rastreador';if(n>=4)return'saltador';
-  return entry||'patatenra';
+  return normalizarEtapaKey(entry);
 }
 function eixoCss(eixo){
   const m={'Habilidades para a Vida':'eixo-Habilidades','Meio Ambiente':'eixo-Ambiente','Paz e Desenvolvimento':'eixo-Paz','Saúde e Bem-estar':'eixo-Saude'};
