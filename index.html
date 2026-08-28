@@ -342,16 +342,8 @@ footer{text-align:center;padding:18px 16px 28px;font-size:11px;color:#90A4AE;bor
         </div>
       </div>
     </div>
-    <div class="sheets-config" style="margin-top:4px">
-      <h4>📊 URL do Google Apps Script</h4>
-      <input type="text" id="inputSheetsUrl" placeholder="https://script.google.com/macros/s/.../exec">
-      <div class="sheets-hint">
-        ➊ Abra o Google Sheets · Extensões → Apps Script<br>
-        ➋ Cole o script fornecido · Salve e implante como App da Web<br>
-        ➌ Copie a URL /exec e cole aqui (opcional)
-      </div>
-    </div>
-    <button class="btn-wolf" onclick="doLogin()">Entrar na Alcateia →</button>
+    <div style="font-size:10px;color:#2E7D32;text-align:center;margin-top:7px;">Conexão com a planilha configurada automaticamente.</div>
+<button class="btn-wolf" onclick="doLogin()">Entrar na Alcateia →</button>
   </div>
 
 </div><!-- setup-card -->
@@ -763,11 +755,12 @@ const MOD_COLORS = {
 // STATE
 // ════════════════════════════════════════════════════════════════════
 let scouts=[], currentId=null, currentEixo=EIXOS_LIST[0].key, escolhaCtx={blocoId:null};
-let setupMod=null, setupStep=1, allLobinhos=[], sheetsUrl='', lastSync=null;
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycby6gKvRFWDmybOXiMMCAX18vvLHFiIMHHPmUG5mf-rALh4Ru1bs1bS6xnnlkujIE87m/exec';
+let setupMod=null, setupStep=1, allLobinhos=[], sheetsUrl=SHEETS_URL, lastSync=null;
 
 function load(){
   try{const d=localStorage.getItem('alcateia_baleia_v2');if(d)scouts=JSON.parse(d);}catch(e){scouts=[];}
-  sheetsUrl=localStorage.getItem('alcateia_sheetsUrl')||'';
+  sheetsUrl=SHEETS_URL;
 }
 function save(){localStorage.setItem('alcateia_baleia_v2',JSON.stringify(scouts));}
 function ensure(s){if(!s.completed)s.completed={};if(!s.pending)s.pending={};if(!s.especialidades)s.especialidades={};if(!s.escolhas)s.escolhas={};return s;}
@@ -798,9 +791,7 @@ async function doLogin(){
   const reg=document.getElementById('inputReg').value.trim();
   const name=document.getElementById('inputName').value.trim();
   const matilha=document.getElementById('inputMatilha').value.trim();
-  const url=document.getElementById('inputSheetsUrl').value.trim();
-  if(url) {sheetsUrl=url; localStorage.setItem('alcateia_sheetsUrl',url);}
-  if(!reg||!name){showToast('Informe o registro e o nome.','error');return;}
+if(!reg||!name){showToast('Informe o registro e o nome.','error');return;}
   // Tentar buscar do Sheets
   let remote=null;
   if(sheetsUrl){
@@ -844,6 +835,46 @@ async function doLogin(){
   launchApp();
 }
 
+
+let autoSyncTimer=null;
+let autoSyncBusy=false;
+
+async function autoSync(){
+  const s=getS();
+  if(!s || !sheetsUrl || autoSyncBusy) return;
+
+  autoSyncBusy=true;
+  try{
+    const result=await syncFromSheets(s);
+
+    if(result==='synced'){
+      lastSync=new Date();
+      setSyncStatus('ok','Atualizado automaticamente '+lastSync.toLocaleTimeString('pt-BR'));
+      renderScoutBar();
+      buildEixoTabs();
+      renderBlocos();
+    }else if(result==='error'){
+      setSyncStatus('err','Sem conexão com a planilha');
+    }
+  }finally{
+    autoSyncBusy=false;
+  }
+}
+
+function scheduleAutoSync(){
+  if(autoSyncTimer) clearInterval(autoSyncTimer);
+  autoSync();
+  autoSyncTimer=setInterval(autoSync,30000);
+}
+
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible') autoSync();
+});
+
+window.addEventListener('focus',()=>{
+  autoSync();
+});
+
 function launchApp(){
   document.getElementById('screenSetup').classList.remove('active');
   document.getElementById('screenApp').classList.add('active');
@@ -853,6 +884,7 @@ function launchApp(){
   document.getElementById('userName').textContent=fn;
   renderScoutBar();buildEixoTabs();renderBlocos();
   localStorage.setItem('alcateia_last',JSON.stringify({id:s.id,registro:s.registro,name:s.name}));
+  scheduleAutoSync();
 }
 
 function showChangeUser(){
@@ -882,23 +914,39 @@ async function fetchFromSheets(reg){
 
 async function syncFromSheets(s){
   if(!sheetsUrl)return 'skipped';
+
   try{
     const remote=await fetchFromSheets(s.registro);
+
     if(!remote || remote.ok!==true)return 'error';
     if(!remote.encontrado)return 'notfound';
+
     ensure(s);
+
     if(remote.meta){
       if(remote.meta.nome)s.name=remote.meta.nome;
       if(remote.meta.matilha!=null)s.matilha=remote.meta.matilha;
       if(remote.meta.modalidade)s.modalidade=normalizarModalidadeKey(remote.meta.modalidade);
       if(remote.meta.etapa)s.entryEtapa=normalizarEtapaKey(remote.meta.etapa);
     }
-    s.completed={...(remote.checked||{})};
-    s.pending={...(remote.pending||{})};
+
+    // A planilha é a fonte oficial das aprovações.
+    // Se o chefe marcou SIM, o estado local PENDENTE é removido imediatamente.
+    const checked={...(remote.checked||{})};
+    const pending={...(remote.pending||{})};
+
+    Object.keys(checked).forEach(id=>{
+      if(checked[id]) delete pending[id];
+    });
+
+    s.completed=checked;
+    s.pending=pending;
     s.especialidades={...(remote.especialidades||{})};
     s.escolhas={...(remote.escolhas||{})};
+
     save();
     return 'synced';
+
   }catch(e){
     return 'error';
   }
@@ -1087,7 +1135,13 @@ function buildEixoTabs(){
     const tab=document.createElement('div');
     tab.className='eixo-tab '+e.css+(e.key===currentEixo?' active':'');
     tab.textContent=e.key+` (${done}/${blist.length})`;
-    tab.onclick=()=>{currentEixo=e.key;buildEixoTabs();renderBlocos();};
+    tab.onclick=()=>{
+      currentEixo=e.key;
+      buildEixoTabs();
+      renderBlocos();
+      // Atualiza imediatamente ao trocar de eixo, sem exigir clique em Sincronizar.
+      autoSync();
+    };
     el.appendChild(tab);
   });
 }
@@ -1467,11 +1521,19 @@ function hideLoading(){document.getElementById('loadingOverlay').style.display='
 
 // INIT
 load();
-if(sheetsUrl) document.getElementById('inputSheetsUrl').value=sheetsUrl;
 window.addEventListener('DOMContentLoaded',()=>{
   const last=localStorage.getItem('alcateia_last');
-  if(last){try{const l=JSON.parse(last);const s=scouts.find(x=>x.id===l.id);if(s&&confirm('🐺 Retomar sessão de '+l.name+'?')){currentId=s.id;launchApp();return;}}catch(e){}}
-  if(sheetsUrl){document.getElementById('inputSheetsUrl').value=sheetsUrl;}
+  if(last){
+    try{
+      const l=JSON.parse(last);
+      const s=scouts.find(x=>x.id===l.id);
+      if(s&&confirm('🐺 Retomar sessão de '+l.name+'?')){
+        currentId=s.id;
+        launchApp();
+        return;
+      }
+    }catch(e){}
+  }
 });
 </script>
 </body>
